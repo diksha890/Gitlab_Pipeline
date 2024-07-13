@@ -1,0 +1,91 @@
+stages:
+  - docker_build 
+  - docker_push
+  - docker_clean
+  - mysql_backup
+  - deployment
+    
+variables:
+  DOCKER_IMAGE_NAME: "$DOCKER_IMAGE-$CI_PIPELINE_ID"
+
+docker_build:
+  stage: docker_build
+  script:
+    - echo "Navigating to the test/docker directory"
+    - cd test/docker
+    - echo "Cloning the repository"
+    - git clone https://${username}:${GITLAB_TOKEN}@gitlab.surekhatech.com/st-internal/employee-application-form.git 
+    - ls -la
+    - cd employee-application-form
+    - shopt -s dotglob
+    - ls
+    - cd ..
+    - echo "Moving files outside of the employee-application-form folder" 
+    - rm -rf employee-application-form/.git*    
+    - mv employee-application-form/* .    
+    - echo "Moving remaining files from employee-application-form"
+    - find employee-application-form -mindepth 1 -exec mv -t . {} +         
+    - rmdir  employee-application-form        
+    - echo "Writing database credentials to .env file"
+    - echo "MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}" >> .env
+    - echo "MYSQL_DATABASE=${MYSQL_DATABASE}" >> .env
+    - echo "MYSQL_USER=${MYSQL_USER}" >> .env
+    - echo "MYSQL_PASSWORD=${MYSQL_PASSWORD}" >> .env 
+    - ls -la
+    - echo $DOCKER_IMAGE_NAME
+    - docker build -t $DOCKER_IMAGE_NAME .
+  tags:
+    - EAF_test  
+  only:
+    - master
+
+docker_push :
+  stage: docker_push  
+  script: 
+    - echo "Logging in to Docker Hub"           
+    - docker push $DOCKER_IMAGE_NAME
+  tags:
+    - EAF_test  
+  only:
+    - master
+
+docker_clean :
+  stage: docker_clean  
+  script: 
+    - echo "docker_cleanup started"
+    - docker rmi $DOCKER_IMAGE_NAME
+    - echo "docker_cleanup completed"
+  tags:
+    - EAF_test  
+  only:
+    - master
+
+
+mysql_backup:
+  stage: mysql_backup 
+  when: manual 
+  script:
+    - echo "mysql_backup started"
+    - whoami
+    - ssh root@192.168.1.21 'bash -i -c "/opt/project/employee-application-form-devops/test/backup/backup.sh"'
+    - echo "mysql_backup completed"
+  tags:
+    - EAF_test  
+  only:
+    - master
+
+
+deployment:
+  stage: deployment 
+  when: manual
+  script: 
+    - echo "apache_deployment started"      
+    - ssh st-form@192.168.1.21 'bash -i -c "chmod +x /opt/project/employee-application-form-devops/test/backup/apache_down.sh && /opt/project/employee-application-form-devops/test/backup/apache_down.sh"'
+     # Add new apache image version    
+    - echo 'export DOCKER_IMAGE_NAME='$DOCKER_IMAGE_NAME | ssh st-form@192.168.1.21 'cat >> /mnt/project/eaf/backup/apache_version.sh'
+     # Apache compose up
+    - ssh st-form@192.168.1.21 'bash -i -c "chmod +x /opt/project/employee-application-form-devops/test/backup && /opt/project/employee-application-form-devops/test/backup/apache_up.sh"'
+  tags:
+    - EAF_test  
+  only:
+    - master
